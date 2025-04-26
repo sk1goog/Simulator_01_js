@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Rubik's Cube Simulator</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #controls { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.8); padding: 10px; border-radius: 4px; z-index: 10; }
+    #algo { width: 200px; }
+    button { margin-left: 5px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input id="algo" placeholder="Zugfolge eingeben, z.B. R U R' U'">
+    <button id="start">Start</button>
+  </div>
+
+  <!-- Three.js und OrbitControls -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    // Grundsetup Szene, Kamera, Renderer
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf0f0f0);
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(5, 5, 5);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Steuerung
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Licht
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    // Hauptgruppe für alle Cubies
+    const cubeGroup = new THREE.Group();
+    scene.add(cubeGroup);
+
+    // Farben pro Face
+    const colors = { U: 0xffff00, D: 0xffffff, F: 0x00ff00, B: 0x0000ff, R: 0xff0000, L: 0xffa500 };
+
+    // Baue 27 Cubies
+    const cubies = [];
+    const size = 1, gap = 0.05;
+    for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
+      const geom = new THREE.BoxGeometry(size, size, size);
+      const faces = [
+        ['R', x === 1],
+        ['L', x === -1],
+        ['U', y === 1],
+        ['D', y === -1],
+        ['F', z === 1],
+        ['B', z === -1]
+      ];
+      const mats = faces.map(([f, cond]) =>
+        new THREE.MeshLambertMaterial({ color: cond ? colors[f] : 0x000000 })
+      );
+      const cubie = new THREE.Mesh(geom, mats);
+      cubie.position.set(x * (size + gap), y * (size + gap), z * (size + gap));
+      cubeGroup.add(cubie);
+      cubies.push(cubie);
+    }
+
+    // Mapping der Moves: Achse und Grundrichtung
+    const moveMap = {
+      R: { axis: new THREE.Vector3(1,0,0), dir: -1 },
+      L: { axis: new THREE.Vector3(1,0,0), dir:  1 },
+      U: { axis: new THREE.Vector3(0,1,0), dir: -1 },
+      D: { axis: new THREE.Vector3(0,1,0), dir:  1 },
+      F: { axis: new THREE.Vector3(0,0,1), dir: -1 },
+      B: { axis: new THREE.Vector3(0,0,1), dir: -1 }
+    };
+
+    // Parser für Zugfolge
+    function parseAlgorithm(str) {
+      return str.trim().split(/\s+/).map(tok => {
+        const face = tok[0];
+        let count = 1, prime = false;
+        if (tok.endsWith('2')) count = 2;
+        if (tok.endsWith("'")) prime = true;
+        return { face, count, prime };
+      });
+    }
+
+    // Auswahl der Cubies einer Ebene
+    function getFaceGroup(face) {
+      const eps = 0.001;
+      return cubies.filter(c => {
+        const p = c.position;
+        switch(face) {
+          case 'R': return p.x > eps;
+          case 'L': return p.x < -eps;
+          case 'U': return p.y > eps;
+          case 'D': return p.y < -eps;
+          case 'F': return p.z > eps;
+          case 'B': return p.z < -eps;
+        }
+      });
+    }
+
+    // Einzelmove-Animation mit Gruppierung
+    function animateMove({ face, count, prime }, onComplete) {
+      const { axis, dir: baseDir } = moveMap[face];
+      const slice = getFaceGroup(face);
+      // temporäre Gruppe für die Ebene
+      const tempGroup = new THREE.Group();
+      scene.add(tempGroup);
+      slice.forEach(c => tempGroup.attach(c));
+
+      let rotated = 0;
+      const total = Math.PI/2 * count;
+      const direction = baseDir * (prime ? -1 : 1);
+
+      function step() {
+        const delta = Math.min(0.1, total - rotated);
+        tempGroup.rotateOnAxis(axis, direction * delta);
+        rotated += delta;
+        if (rotated < total) requestAnimationFrame(step);
+        else {
+          slice.forEach(c => cubeGroup.attach(c));
+          scene.remove(tempGroup);
+          onComplete();
+        }
+      }
+      step();
+    }
+
+    // Sequenzieller Runner
+    let animating = false;
+    function runSequence(seq) {
+      if (!seq.length) { animating = false; return; }
+      animating = true;
+      animateMove(seq.shift(), () => runSequence(seq));
+    }
+
+    // Start-Button Event
+    document.getElementById('start').addEventListener('click', () => {
+      if (animating) return;
+      const moves = parseAlgorithm(document.getElementById('algo').value);
+      runSequence(moves);
+    });
+
+    // Render-Loop
+    (function render() {
+      requestAnimationFrame(render);
+      controls.update();
+      renderer.render(scene, camera);
+    })();
+
+    // Fenstergröße anpassen
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
